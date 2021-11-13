@@ -1,4 +1,5 @@
 #include <stdio.h>
+
 #define TPB 256
 #define BDIMX 1 
 
@@ -9,7 +10,7 @@ __global__ void helloWorld()
 
 int main()
 {
-	helloWorld<<<dim3(BDIMX), dim3(TPB)>>>();
+	helloWorld << <dim3(BDIMX), dim3(TPB) >> > ();
 
 	cudaDeviceSynchronize();
 
