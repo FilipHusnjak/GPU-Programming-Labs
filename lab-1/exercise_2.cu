@@ -6,6 +6,7 @@
 
 __global__ void saxpy(const float *x, float *y, float a) {
     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (idx >= ARRAY_SIZE) return;
     y[idx] += x[idx] * a;
 }
 
