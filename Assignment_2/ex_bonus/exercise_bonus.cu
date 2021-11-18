@@ -2,10 +2,11 @@
 #include <curand.h>
 #include <cstdio>
 #include <chrono>
+#include <cuda_fp16.h>
 
 #define TPB 256
-#define NUM_SAMPLES 1000000
-#define N 1000
+#define NUM_SAMPLES 10000000
+#define N 100000
 
 #define PI 3.14159265359
 
@@ -45,17 +46,16 @@ int main() {
     unsigned int *d_res;
     unsigned int a = 0;
     cudaMalloc(&d_res, sizeof(*d_res));
-    cudaMemcpy(d_res, &a, sizeof(a), cudaMemcpyHostToDevice);
 
     auto t1 = std::chrono::system_clock::now();
+    cudaMemcpy(d_res, &a, sizeof(a), cudaMemcpyHostToDevice);
     ornl<<<(thread_num + TPB - 1) / TPB, TPB>>>(d_res, states);
     cudaDeviceSynchronize();
+    unsigned int res;
+    cudaMemcpy(&res, d_res, sizeof(*d_res), cudaMemcpyDeviceToHost);
     auto t2 = std::chrono::system_clock::now();
     printf("Calculating PI on the GPU done in: %lf ms!\n",
            std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count());
-
-    unsigned int res;
-    cudaMemcpy(&res, d_res, sizeof(*d_res), cudaMemcpyDeviceToHost);
 
     double pi = 4 * (double) res / (NUM_SAMPLES);
     printf("Obtained PI \t\t= %f\n", pi);

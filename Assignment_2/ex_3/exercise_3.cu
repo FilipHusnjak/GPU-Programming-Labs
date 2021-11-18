@@ -1,9 +1,9 @@
 #include <cstdio>
 #include <chrono>
 
-#define NUM_PARTICLES 10000
-#define NUM_ITERATIONS 10
-#define TPB 256
+#define NUM_PARTICLES 10000000
+#define NUM_ITERATIONS 1
+#define TPB 64
 
 typedef struct {
     float3 Position;
