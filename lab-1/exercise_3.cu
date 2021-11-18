@@ -1,7 +1,7 @@
 #include <cstdio>
 #include <chrono>
 
-#define NUM_PARTICLES 1000000
+#define NUM_PARTICLES 10000
 #define NUM_ITERATIONS 10
 #define TPB 256
 
@@ -40,11 +40,13 @@ int main() {
     auto *particles = (Particle *) malloc(NUM_PARTICLES * sizeof(Particle));
     Particle *d_particles;
     cudaMalloc(&d_particles, NUM_PARTICLES * sizeof(Particle));
-    cudaMemcpy(d_particles, particles, NUM_PARTICLES * sizeof(Particle), cudaMemcpyHostToDevice);
 
     auto t1 = std::chrono::system_clock::now();
+    cudaMemcpy(d_particles, particles, NUM_PARTICLES * sizeof(Particle), cudaMemcpyHostToDevice);
     update<<<(NUM_PARTICLES + TPB - 1) / TPB, TPB>>>(d_particles);
     cudaDeviceSynchronize();
+    auto *particles_cpy = (Particle *) malloc(NUM_PARTICLES * sizeof(Particle));
+    cudaMemcpy(particles_cpy, d_particles, NUM_PARTICLES * sizeof(Particle), cudaMemcpyDeviceToHost);
     auto t2 = std::chrono::system_clock::now();
     printf("Updating particles on the GPU done in: %lf ms!\n",
            std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count());
@@ -56,9 +58,6 @@ int main() {
     t2 = std::chrono::system_clock::now();
     printf("Updating particles on the CPU done in: %lf ms!\n",
            std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count());
-
-    auto *particles_cpy = (Particle *) malloc(NUM_PARTICLES * sizeof(Particle));
-    cudaMemcpy(particles_cpy, d_particles, NUM_PARTICLES * sizeof(Particle), cudaMemcpyDeviceToHost);
 
     for (int i = 0; i < NUM_PARTICLES; i++) {
         if (!equal(particles[i], particles_cpy[i])) {
