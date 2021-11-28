@@ -1,10 +1,11 @@
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <chrono>
 
 #define BLOCK_SIZE  16
 #define HEADER_SIZE 138
+
+#define BLOCK_SIZE_SH 18
 
 typedef unsigned char BYTE;
 
@@ -17,8 +18,6 @@ typedef struct {
     float *data;
 } BMPImage;
 
-typedef struct timeval tval;
-
 BYTE g_info[HEADER_SIZE]; // Reference header
 
 /**
@@ -27,8 +26,6 @@ BYTE g_info[HEADER_SIZE]; // Reference header
  */
 BMPImage readBMP(char *filename) {
     BMPImage bitmap = {0};
-    int size = 0;
-    BYTE *data = NULL;
     FILE *file = fopen(filename, "rb");
 
     // Read the header (expected BGR - 24bpp)
@@ -37,10 +34,10 @@ BMPImage readBMP(char *filename) {
     // Get the image width / height from the header
     bitmap.width = *((int *) &g_info[18]);
     bitmap.height = *((int *) &g_info[22]);
-    size = *((int *) &g_info[34]);
+    int size = *((int *) &g_info[34]);
 
     // Read the image data
-    data = (BYTE *) malloc(sizeof(BYTE) * size);
+    BYTE *data = (BYTE *) malloc(sizeof(BYTE) * size);
     fread(data, sizeof(BYTE), size, file);
 
     // Convert the pixel values to float
@@ -59,10 +56,8 @@ BMPImage readBMP(char *filename) {
 /**
  * Writes a BMP file in grayscale given its image data and a filename.
  */
-void writeBMPGrayscale(int width, int height, float *image, char *filename) {
-    FILE *file = NULL;
-
-    file = fopen(filename, "wb");
+void writeBMPGrayscale(int width, int height, const float *image, char *filename) {
+    FILE *file = fopen(filename, "wb");
 
     // Write the reference header
     fwrite(g_info, sizeof(BYTE), HEADER_SIZE, file);
@@ -150,16 +145,23 @@ void cpu_grayscale(int width, int height, float *image, float *image_out) {
  * Converts a given 24bpp image into 8bpp grayscale using the GPU.
  */
 __global__ void gpu_grayscale(int width, int height, float *image, float *image_out) {
-    ////////////////
-    // TO-DO #4.2 /////////////////////////////////////////////
-    // Implement the GPU version of the grayscale conversion //
-    ///////////////////////////////////////////////////////////
+    const unsigned int x = threadIdx.x + blockDim.x * blockIdx.x;
+    const unsigned int y = threadIdx.y + blockDim.y * blockIdx.y;
+
+    if (x >= width || y >= height) return;
+
+    float *pixel = &image[y * 3 * width + x * 3];
+
+    // Convert to grayscale following the "luminance" model
+    image_out[y * width + x] = pixel[0] * 0.0722f + // B
+                               pixel[1] * 0.7152f + // G
+                               pixel[2] * 0.2126f;  // R
 }
 
 /**
  * Applies a 3x3 convolution matrix to a pixel using the CPU.
  */
-float cpu_applyFilter(float *image, int stride, float *matrix, int filter_dim) {
+float cpu_applyFilter(const float *image, int stride, const float *matrix, int filter_dim) {
     float pixel = 0.0f;
 
     for (int h = 0; h < filter_dim; h++) {
@@ -177,15 +179,19 @@ float cpu_applyFilter(float *image, int stride, float *matrix, int filter_dim) {
 /**
  * Applies a 3x3 convolution matrix to a pixel using the GPU.
  */
-__device__ float gpu_applyFilter(float *image, int stride, float *matrix, int filter_dim) {
-    ////////////////
-    // TO-DO #5.2 ////////////////////////////////////////////////
-    // Implement the GPU version of cpu_applyFilter()           //
-    //                                                          //
-    // Does it make sense to have a separate gpu_applyFilter()? //
-    //////////////////////////////////////////////////////////////
+__device__ float gpu_applyFilter(const float *image, int stride, const float *matrix, int filter_dim) {
+    float pixel = 0.0f;
 
-    return 0.0f;
+    for (int h = 0; h < filter_dim; h++) {
+        int offset = h * stride;
+        int offset_kernel = h * filter_dim;
+
+        for (int w = 0; w < filter_dim; w++) {
+            pixel += image[offset + w] * matrix[offset_kernel + w];
+        }
+    }
+
+    return pixel;
 }
 
 /**
@@ -210,21 +216,25 @@ void cpu_gaussian(int width, int height, float *image, float *image_out) {
 /**
  * Applies a Gaussian 3x3 filter to a given image using the GPU.
  */
-__global__ void gpu_gaussian(int width, int height, float *image, float *image_out) {
+__global__ void gpu_gaussian(int width, int height, const float *image, float *image_out) {
+    __shared__ float sh_block[BLOCK_SIZE_SH * BLOCK_SIZE_SH];
+    const unsigned int index_x = threadIdx.x + BLOCK_SIZE * blockIdx.x;
+    const unsigned int index_y = threadIdx.y + BLOCK_SIZE * blockIdx.y;
+    if (index_x >= width || index_y >= height) return;
+    const unsigned int offset = threadIdx.y * BLOCK_SIZE_SH + threadIdx.x;
+    sh_block[offset] = image[index_y * width + index_x];
+    __syncthreads();
+
+    if (threadIdx.x >= BLOCK_SIZE || threadIdx.y >= BLOCK_SIZE) return;
+
     float gaussian[9] = {1.0f / 16.0f, 2.0f / 16.0f, 1.0f / 16.0f,
                          2.0f / 16.0f, 4.0f / 16.0f, 2.0f / 16.0f,
                          1.0f / 16.0f, 2.0f / 16.0f, 1.0f / 16.0f};
 
-    int index_x = blockIdx.x * blockDim.x + threadIdx.x;
-    int index_y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (index_x >= (width - 2) || index_y >= (height - 2)) return;
 
-    if (index_x < (width - 2) && index_y < (height - 2)) {
-        int offset_t = index_y * width + index_x;
-        int offset = (index_y + 1) * width + (index_x + 1);
-
-        image_out[offset] = gpu_applyFilter(&image[offset_t],
-                                            width, gaussian, 3);
-    }
+    image_out[(index_y + 1) * width + (index_x + 1)] = gpu_applyFilter(&sh_block[offset],
+                                                                       BLOCK_SIZE_SH, gaussian, 3);
 }
 
 /**
@@ -256,22 +266,37 @@ void cpu_sobel(int width, int height, float *image, float *image_out) {
 /**
  * Calculates the gradient of an image using a Sobel filter on the GPU.
  */
-__global__ void gpu_sobel(int width, int height, float *image, float *image_out) {
-    ////////////////
-    // TO-DO #6.1 /////////////////////////////////////
-    // Implement the GPU version of the Sobel filter //
-    ///////////////////////////////////////////////////
+__global__ void gpu_sobel(int width, int height, const float *image, float *image_out) {
+    __shared__ float sh_block[BLOCK_SIZE_SH * BLOCK_SIZE_SH];
+    const unsigned int index_x = threadIdx.x + BLOCK_SIZE * blockIdx.x;
+    const unsigned int index_y = threadIdx.y + BLOCK_SIZE * blockIdx.y;
+    if (index_x >= width || index_y >= height) return;
+    const unsigned int offset = threadIdx.y * BLOCK_SIZE_SH + threadIdx.x;
+    sh_block[offset] = image[index_y * width + index_x];
+    __syncthreads();
+
+    if (threadIdx.x >= BLOCK_SIZE || threadIdx.y >= BLOCK_SIZE) return;
+
+    float sobel_x[9] = {1.0f, 0.0f, -1.0f,
+                        2.0f, 0.0f, -2.0f,
+                        1.0f, 0.0f, -1.0f};
+    float sobel_y[9] = {1.0f, 2.0f, 1.0f,
+                        0.0f, 0.0f, 0.0f,
+                        -1.0f, -2.0f, -1.0f};
+
+    if (index_x >= width - 2 || index_y >= height - 2) return;
+
+    float gx = gpu_applyFilter(&sh_block[offset], BLOCK_SIZE_SH, sobel_x, 3);
+    float gy = gpu_applyFilter(&sh_block[offset], BLOCK_SIZE_SH, sobel_y, 3);
+
+    // Note: The output can be negative or exceed the max. color value
+    // of 255. We compensate this afterwards while storing the file.
+    image_out[(index_y + 1) * width + (index_x + 1)] = sqrtf(gx * gx + gy * gy);
 }
 
 int main(int argc, char **argv) {
-    BMPImage bitmap = {0};
-    float *d_bitmap = {0};
-    float *image_out[2] = {0};
-    float *d_image_out[2] = {0};
-    int image_size = 0;
     double elapsed[2] = {0};
-    dim3 grid(1);                       // The grid will be defined later
-    dim3 block(BLOCK_SIZE, BLOCK_SIZE); // The block size will not change
+    dim3 block(BLOCK_SIZE_SH, BLOCK_SIZE_SH); // The block size will not change
 
     // Make sure the filename is provided
     if (argc != 2) {
@@ -280,14 +305,16 @@ int main(int argc, char **argv) {
     }
 
     // Read the input image and update the grid dimension
-    bitmap = readBMP(argv[1]);
-    image_size = bitmap.width * bitmap.height;
-    grid = dim3(((bitmap.width + (BLOCK_SIZE - 1)) / BLOCK_SIZE),
-                ((bitmap.height + (BLOCK_SIZE - 1)) / BLOCK_SIZE));
+    BMPImage bitmap = readBMP(argv[1]);
+    int image_size = bitmap.width * bitmap.height;
+    dim3 grid = dim3(((bitmap.width + (BLOCK_SIZE - 1)) / BLOCK_SIZE),
+                     ((bitmap.height + (BLOCK_SIZE - 1)) / BLOCK_SIZE));
 
     printf("Image opened (width=%d height=%d).\n", bitmap.width, bitmap.height);
 
     // Allocate the intermediate image buffers for each step
+    float *image_out[2];
+    float *d_image_out[2];
     for (int i = 0; i < 2; i++) {
         image_out[i] = (float *) calloc(image_size, sizeof(float));
 
@@ -295,6 +322,7 @@ int main(int argc, char **argv) {
         cudaMemset(d_image_out[i], 0, image_size * sizeof(float));
     }
 
+    float *d_bitmap;
     cudaMalloc(&d_bitmap, image_size * sizeof(float) * 3);
     cudaMemcpy(d_bitmap, bitmap.data,
                image_size * sizeof(float) * 3, cudaMemcpyHostToDevice);
@@ -303,18 +331,18 @@ int main(int argc, char **argv) {
     {
         // Launch the CPU version
         auto t1 = std::chrono::system_clock::now();
-        cpu_grayscale(bitmap.width, bitmap.height, bitmap.data, image_out[0]);
+        // cpu_grayscale(bitmap.width, bitmap.height, bitmap.data, image_out[0]);
         auto t2 = std::chrono::system_clock::now();
 
         elapsed[0] = std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count();
 
         // Launch the GPU version
         t1 = std::chrono::system_clock::now();
-        // gpu_grayscale<<<grid, block>>>(bitmap.width, bitmap.height,
-        //                                d_bitmap, d_image_out[0]);
+        gpu_grayscale<<<grid, block>>>(bitmap.width, bitmap.height,
+                                       d_bitmap, d_image_out[0]);
 
-        // cudaMemcpy(image_out[0], d_image_out[0],
-        //            image_size * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(image_out[0], d_image_out[0],
+                   image_size * sizeof(float), cudaMemcpyDeviceToHost);
         t2 = std::chrono::system_clock::now();
 
         elapsed[1] = std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count();
@@ -327,18 +355,18 @@ int main(int argc, char **argv) {
     {
         // Launch the CPU version
         auto t1 = std::chrono::system_clock::now();
-        cpu_gaussian(bitmap.width, bitmap.height, image_out[0], image_out[1]);
+        //cpu_gaussian(bitmap.width, bitmap.height, image_out[0], image_out[1]);
         auto t2 = std::chrono::system_clock::now();
 
         elapsed[0] = std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count();
 
         // Launch the GPU version
         t1 = std::chrono::system_clock::now();
-        // gpu_gaussian<<<grid, block>>>(bitmap.width, bitmap.height,
-        //                               d_image_out[0], d_image_out[1]);
+        gpu_gaussian<<<grid, block>>>(bitmap.width, bitmap.height,
+                                      d_image_out[0], d_image_out[1]);
 
-        // cudaMemcpy(image_out[1], d_image_out[1],
-        //            image_size * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(image_out[1], d_image_out[1],
+                   image_size * sizeof(float), cudaMemcpyDeviceToHost);
         t2 = std::chrono::system_clock::now();
 
         elapsed[1] = std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count();
@@ -351,18 +379,18 @@ int main(int argc, char **argv) {
     {
         // Launch the CPU version
         auto t1 = std::chrono::system_clock::now();
-        cpu_sobel(bitmap.width, bitmap.height, image_out[1], image_out[0]);
+        //scpu_sobel(bitmap.width, bitmap.height, image_out[1], image_out[0]);
         auto t2 = std::chrono::system_clock::now();
 
         elapsed[0] = std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count();
 
         // Launch the GPU version
         t1 = std::chrono::system_clock::now();
-        // gpu_sobel<<<grid, block>>>(bitmap.width, bitmap.height,
-        //                            d_image_out[1], d_image_out[0]);
+        gpu_sobel<<<grid, block>>>(bitmap.width, bitmap.height,
+                                   d_image_out[1], d_image_out[0]);
 
-        // cudaMemcpy(image_out[0], d_image_out[0],
-        //            image_size * sizeof(float), cudaMemcpyDeviceToHost);
+        cudaMemcpy(image_out[0], d_image_out[0],
+                   image_size * sizeof(float), cudaMemcpyDeviceToHost);
         t2 = std::chrono::system_clock::now();
 
         elapsed[1] = std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count();
@@ -379,6 +407,8 @@ int main(int argc, char **argv) {
 
     freeBMP(bitmap);
     cudaFree(d_bitmap);
+
+    checkCUDAError();
 
     return 0;
 }
