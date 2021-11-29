@@ -49,7 +49,7 @@ int mainPinnedMemory() {
 
     auto t1 = std::chrono::system_clock::now();
 
-    for(int i=0; i<NUM_ITERATIONS; i++){
+    for (int i = 0; i < NUM_ITERATIONS; i++) {
         cudaMemcpy(d_particles, particles, NUM_PARTICLES * sizeof(Particle), cudaMemcpyHostToDevice);
 
         update<<<(NUM_PARTICLES + TPB - 1) / TPB, TPB>>>(d_particles);
@@ -64,7 +64,7 @@ int mainPinnedMemory() {
 
 
     t1 = std::chrono::system_clock::now();
-    for(int it=0; it<NUM_ITERATIONS; it++){
+    for (int it = 0; it < NUM_ITERATIONS; it++) {
         for (int i = 0; i < NUM_PARTICLES; i++) {
             update(particles_cpy[i]);
         }
@@ -92,7 +92,7 @@ int mainPinnedMemory() {
     return 0;
 }
 
-int mainManagedMemory(){
+int mainManagedMemory() {
     Particle *particles;
     cudaMallocManaged(&particles, NUM_PARTICLES * sizeof(Particle));
 
@@ -102,7 +102,7 @@ int mainManagedMemory(){
 
     auto t1 = std::chrono::system_clock::now();
 
-    for(int i=0; i<NUM_ITERATIONS; i++){
+    for (int i = 0; i < NUM_ITERATIONS; i++) {
         update<<<(NUM_PARTICLES + TPB - 1) / TPB, TPB>>>(particles);
 
         cudaDeviceSynchronize();
@@ -115,7 +115,7 @@ int mainManagedMemory(){
 
 
     t1 = std::chrono::system_clock::now();
-    for(int it=0; it<NUM_ITERATIONS; it++){
+    for (int it = 0; it < NUM_ITERATIONS; it++) {
         for (int i = 0; i < NUM_PARTICLES; i++) {
             update(particles_cpy[i]);
         }
@@ -141,7 +141,7 @@ int mainManagedMemory(){
     return 0;
 }
 
-int main(){
+int main() {
 #if MANAGED
     return mainManagedMemory();
 #else

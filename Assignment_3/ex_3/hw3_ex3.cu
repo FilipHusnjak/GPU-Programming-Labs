@@ -1,73 +1,97 @@
 #include <cstdio>
 #include <chrono>
 
-#define TPB 256
-#define ARRAY_SIZE 1000000
+#define NUM_PARTICLES 10000000
+#define TPB 100
 
-__global__ void saxpy(const float *x, float *y, float a) {
+#define NUM_STREAMS 4
+
+typedef struct {
+    float3 Position;
+    float3 Velocity;
+} Particle;
+
+__host__ __device__ void sum(float3 &left, const float3 &right) {
+    left.x += right.x;
+    left.y += right.y;
+    left.z += right.z;
+}
+
+__host__ __device__ void update(Particle &particle) {
+    particle.Velocity.y += 9.81f;
+    sum(particle.Position, particle.Velocity);
+}
+
+__global__ void update(Particle *particles) {
     unsigned int idx = threadIdx.x + blockIdx.x * blockDim.x;
-    if (idx >= ARRAY_SIZE) return;
-    y[idx] += x[idx] * a;
+    update(particles[idx]);
+}
+
+bool equal(const float3 &left, const float3 &right) {
+    return left.x == right.x && left.y == right.y && left.z == right.z;
+}
+
+bool equal(const Particle &left, const Particle &right) {
+    return equal(left.Position, right.Position) && equal(left.Velocity, right.Velocity);
 }
 
 int main() {
-    dim3 grid((ARRAY_SIZE + TPB - 1) / TPB);
-    dim3 block(TPB);
+    Particle *particles;
+    cudaMallocHost(&particles, NUM_PARTICLES * sizeof(Particle));
 
-    auto *x = (float *) malloc(ARRAY_SIZE * sizeof(float));
-    auto *y = (float *) malloc(ARRAY_SIZE * sizeof(float));
+    auto *particles_cpy = (Particle *) malloc(NUM_PARTICLES * sizeof(Particle));
+    memcpy(particles_cpy, particles, NUM_PARTICLES * sizeof(Particle));
 
-    for (int i = 0; i < ARRAY_SIZE; i++) {
-        x[i] = y[i] = float(i);
+    Particle *d_particles;
+    cudaMalloc(&d_particles, NUM_PARTICLES * sizeof(Particle));
+
+    int batch_size = NUM_PARTICLES / NUM_STREAMS;
+    batch_size += NUM_PARTICLES % NUM_STREAMS == 0 ? 0 : 1;
+
+    cudaStream_t streams[NUM_STREAMS];
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        cudaStreamCreate(&streams[i]);
     }
 
-    float *d_x;
-    cudaMalloc(&d_x, ARRAY_SIZE * sizeof(float));
-    cudaMemcpy(d_x, x, ARRAY_SIZE * sizeof(float), cudaMemcpyHostToDevice);
-    float *d_y;
-    cudaMalloc(&d_y, ARRAY_SIZE * sizeof(float));
-    cudaMemcpy(d_y, y, ARRAY_SIZE * sizeof(float), cudaMemcpyHostToDevice);
-
-    float a = 1;
     auto t1 = std::chrono::system_clock::now();
-    saxpy<<<grid, block>>>(d_x, d_y, a);
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        cudaMemcpyAsync(&d_particles[i * batch_size], &particles[i * batch_size], batch_size * sizeof(Particle),
+                        cudaMemcpyHostToDevice, streams[i]);
+        update<<<(batch_size + TPB - 1) / TPB, TPB, 0, streams[i]>>>(&d_particles[i * batch_size]);
+        cudaMemcpyAsync(&particles[i * batch_size], &d_particles[i * batch_size], batch_size * sizeof(Particle),
+                        cudaMemcpyDeviceToHost, streams[i]);
+    }
     cudaDeviceSynchronize();
     auto t2 = std::chrono::system_clock::now();
-    printf("Computing SAXPY on the GPU done in: %lf ms!\n",
+    printf("Updating particles on the GPU done in: %lf ms!\n",
            std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count());
+
+    for (int i = 0; i < NUM_STREAMS; i++) {
+        cudaStreamDestroy(streams[i]);
+    }
 
     t1 = std::chrono::system_clock::now();
-    for (int i = 0; i < ARRAY_SIZE; i++) {
-        y[i] += x[i] * a;
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+        update(particles_cpy[i]);
     }
     t2 = std::chrono::system_clock::now();
-    printf("Computing SAXPY on the CPU done in: %lf ms!\n",
+    printf("Updating particles on the CPU done in: %lf ms!\n",
            std::chrono::duration<double, std::chrono::milliseconds::period>(t2 - t1).count());
 
-    auto *y_cpy = (float *) malloc(ARRAY_SIZE * sizeof(float));
-    cudaMemcpy(y_cpy, d_y, ARRAY_SIZE * sizeof(float), cudaMemcpyDeviceToHost);
-
-    printf("Comparing the output for each implementation: ");
-
-    for (int i = 0; i < ARRAY_SIZE; i++) {
-        if (y[i] != y_cpy[i]) {
-            printf("Wrong!\n");
-            cudaFree(d_x);
-            cudaFree(d_y);
-            free(x);
-            free(y);
-            free(y_cpy);
+    for (int i = 0; i < NUM_PARTICLES; i++) {
+        if (!equal(particles[i], particles_cpy[i])) {
+            printf("Wrong! %d\n", i);
+            cudaFree(particles);
+            free(particles_cpy);
+            cudaFree(d_particles);
             return 0;
         }
     }
 
     printf("Correct!\n");
-
-    cudaFree(d_x);
-    cudaFree(d_y);
-    free(x);
-    free(y);
-    free(y_cpy);
+    cudaFree(particles);
+    free(particles_cpy);
+    cudaFree(d_particles);
 
     return 0;
 }
