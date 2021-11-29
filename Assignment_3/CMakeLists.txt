@@ -8,9 +8,12 @@ if (MSVC)
 endif ()
 
 add_executable(exercise1 ex_1/hw3_ex1.cu)
+add_executable(exercise2 ex_2/exercise_2a.cu)
 add_executable(exercise3 ex_3/hw3_ex3.cu)
 
 set_target_properties(exercise1 PROPERTIES
+        CUDA_SEPARABLE_COMPILATION ON)
+set_target_properties(exercise2 PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
 set_target_properties(exercise3 PROPERTIES
         CUDA_SEPARABLE_COMPILATION ON)
