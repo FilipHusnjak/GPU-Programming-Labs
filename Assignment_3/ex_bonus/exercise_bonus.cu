@@ -1,8 +1,8 @@
 #include <cuda.h>
-#include <stdio.h>
+#include <cstdio>
 #include <curand.h>
 #include <sys/time.h>
-#include <errno.h>
+#include <cerrno>
 #include <unistd.h>
 #include <cublas_v2.h>
 
