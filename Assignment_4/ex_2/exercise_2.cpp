@@ -1,5 +1,3 @@
-// Template file for the OpenCL Assignment 4
-
 #include <cstdio>
 #include <cstdlib>
 #include <CL/cl.h>
@@ -7,6 +5,8 @@
 
 // This is a macro for checking the error variable.
 #define CHK_ERROR(err) if (err != CL_SUCCESS) fprintf(stderr,"Error: %s\n",clGetErrorString(err))
+
+#define ARRAY_SIZE 100000000
 
 // A errorCode to string converter (forward declaration)
 const char *clGetErrorString(int);
@@ -67,7 +67,7 @@ int main() {
         return 0;
     }
 
-    auto n = 100000000;
+    auto n = ARRAY_SIZE;
     auto array_size = n * (int) sizeof(float);
     auto a = 3.f;
     auto *x = (float *) malloc(array_size);
@@ -112,7 +112,7 @@ int main() {
     t1 = std::chrono::system_clock::now();
     auto pot = get_pot(n);
     size_t work_items_num[] = {(size_t) 1 << pot};
-    size_t workgroup_size[] = {1 << 8};
+    size_t workgroup_size[] = {1uLL << std::min(8, pot)};
     err = clEnqueueNDRangeKernel(cmd_queue, kernel, 1, nullptr, work_items_num, workgroup_size, 0, nullptr, nullptr);
     CHK_ERROR(err);
     err = clEnqueueReadBuffer(cmd_queue, y_dev, CL_TRUE, 0, array_size, d_y, 0, nullptr, nullptr);

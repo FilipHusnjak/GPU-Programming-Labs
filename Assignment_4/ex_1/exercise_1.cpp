@@ -1,5 +1,3 @@
-// Template file for the OpenCL Assignment 4
-
 #include <cstdio>
 #include <cstdlib>
 #include <CL/cl.h>
